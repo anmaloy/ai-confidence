@@ -267,18 +267,30 @@ def plot_signed_bias(raw_by_model, output_path):
 
 
 def confidence_distribution(df, levels):
-    """Fraction of a model's answers that fell at each confidence level.
-    Returns a list aligned with `levels` (each in 0–1, summing to 1)."""
+    """For each confidence level, the fraction of the model's answers that
+    landed there, split into correct and wrong shares. Returns two lists
+    aligned with `levels`: (correct_fraction, wrong_fraction). Together
+    they sum to 1 across all levels."""
     conf = df["Confidence"].str.rstrip("%").astype(float) / 100
-    counts = conf.value_counts(normalize=True)  # level -> fraction
-    return [float(counts.get(level, 0.0)) for level in levels]
+    correct = (df["Answer"] == df["Correct"]).astype(int)
+    total = len(df)
+
+    correct_share, wrong_share = [], []
+    for level in levels:
+        at_level = conf == level
+        n_correct = int((at_level & (correct == 1)).sum())
+        n_wrong = int((at_level & (correct == 0)).sum())
+        correct_share.append(n_correct / total if total else 0.0)
+        wrong_share.append(n_wrong / total if total else 0.0)
+    return correct_share, wrong_share
 
 
 def plot_confidence_distribution(dist_by_model, levels, output_path):
     """Stacked bar chart: one bar per model, segments showing what
-    fraction of its answers landed at each confidence level. Shows how
-    a model SPENDS its confidence — does it hedge low, commit high, or
-    spread out? Each bar sums to 100%."""
+    fraction of its answers landed at each confidence level. Each band is
+    split into its CORRECT portion (solid) and its WRONG portion (hatched,
+    same color) so you can see, e.g., how many of the answers a model
+    placed at 100% were actually right. Each bar sums to 100%."""
     models = list(dist_by_model)
     x = np.arange(len(models))
 
@@ -290,10 +302,15 @@ def plot_confidence_distribution(dist_by_model, levels, output_path):
     fig, ax = plt.subplots(figsize=(2 + 1.6 * len(models), 6))
     bottom = np.zeros(len(models))
     for k, level in enumerate(levels):
-        heights = np.array([dist_by_model[m][k] for m in models])
-        ax.bar(x, heights, 0.6, bottom=bottom, color=colors[k],
+        correct = np.array([dist_by_model[m][0][k] for m in models])
+        wrong = np.array([dist_by_model[m][1][k] for m in models])
+        # Wrong portion first (bottom of the band, hatched), then the
+        # correct portion stacked on top (same color, solid).
+        ax.bar(x, wrong, 0.6, bottom=bottom, color=colors[k],
+               hatch="////", edgecolor="white", linewidth=0)
+        ax.bar(x, correct, 0.6, bottom=bottom + wrong, color=colors[k],
                label=f"{level:.0%}")
-        bottom += heights
+        bottom += correct + wrong
 
     ax.set_xticks(x)
     ax.set_xticklabels(models, rotation=0, ha="center", fontsize=9)
@@ -301,9 +318,21 @@ def plot_confidence_distribution(dist_by_model, levels, output_path):
     ax.yaxis.set_major_formatter(
         plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
     ax.set_ylabel("Share of answers")
-    ax.set_title("How each model spends its confidence")
-    ax.legend(title="Confidence", loc="center left",
-              bbox_to_anchor=(1.0, 0.5), fontsize=9)
+    ax.set_title("How each model spends its confidence "
+                 "(hatched = incorrect)")
+
+    # Two legends: one for confidence levels, one explaining the hatch.
+    from matplotlib.patches import Patch
+    level_legend = ax.legend(title="Confidence", loc="center left",
+                             bbox_to_anchor=(1.0, 0.5), fontsize=9)
+    ax.add_artist(level_legend)
+    hatch_handles = [
+        Patch(facecolor="#888888", hatch="////", edgecolor="white",
+              label="incorrect"),
+    ]
+    ax.legend(handles=hatch_handles, loc="center left",
+              bbox_to_anchor=(1.0, 0.12), fontsize=9, title="Within band")
+
     ax.grid(True, axis="y", alpha=0.3)
 
     fig.tight_layout()
